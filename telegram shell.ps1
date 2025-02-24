@@ -30,6 +30,7 @@ catch {
 $country = (Invoke-RestMethod -Uri "http://ip-api.com/json/").country
 if (-not $country) {
     $country = "Unknown"
+}
 
 $antivirus = Get-CimInstance -Namespace root/SecurityCenter2 -ClassName AntivirusProduct | Select-Object -ExpandProperty displayName
 if (-not $antivirus) {
